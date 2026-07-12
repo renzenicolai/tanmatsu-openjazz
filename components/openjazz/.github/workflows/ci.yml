@@ -1,0 +1,472 @@
+name: CI
+
+on:
+  push:
+    branches: [master, dev, development, feature/**, bugfix/**, pr/**]
+    tags:
+      - 20[0-9][0-9][0-1][0-9][0-3][0-9]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: General preparations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Retrieve tags
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+      - name: Get version, tag and pull request info
+        id: vars
+        run: |
+          tag=""
+          pull="no"
+          if [[ "${{ github.ref }}" == refs/heads/* ]]; then
+            # branch build, check if tag exists
+            tag="$(git tag --points-at HEAD)"
+            oj_version="$(git rev-parse --short "$GITHUB_SHA")"
+          elif [[ "${{ github.ref }}" == refs/pull/* ]]; then
+            # pull request
+            pull="yes"
+            oj_version="pull${{ github.event.number }}"
+          else
+            # tag
+            tag="$(git tag --points-at HEAD)"
+            oj_version="${{ github.ref_name }}"
+          fi
+          echo "oj_version=${oj_version}" >> $GITHUB_OUTPUT
+          echo "tag=${tag}" >> $GITHUB_OUTPUT
+          echo "pull=${pull}" >> $GITHUB_OUTPUT
+      - name: Check version, tag and pull request info
+        run: |
+          echo "oj_version = ${{ steps.vars.outputs.oj_version }}"
+          echo "tag = ${{ steps.vars.outputs.tag }}"
+          echo "pull = ${{ steps.vars.outputs.pull }}"
+    outputs:
+      oj_version: ${{ steps.vars.outputs.oj_version }}
+      tag: ${{ steps.vars.outputs.tag }}
+      pull: ${{ steps.vars.outputs.pull }}
+
+  dist:
+    name: Distribution archives
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -yqq
+          sudo apt-get install -yqq git asciidoctor w3m
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Generate Archives
+        env:
+          OJ_VERSION: ${{ needs.prepare.outputs.oj_version }}
+        run: |
+          builds/ci/adoc2man ${OJ_VERSION} < res/unix/OpenJazz.6.adoc > OpenJazz.6
+          git archive -o openjazz-${OJ_VERSION}.tar.gz \
+            --prefix=openjazz-${OJ_VERSION}/res/unix/ --add-file=OpenJazz.6 \
+            --prefix=openjazz-${OJ_VERSION}/ ${GITHUB_SHA}
+          git archive -o openjazz-${OJ_VERSION}.zip --prefix=openjazz-${OJ_VERSION}/ ${GITHUB_SHA}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openjazz-dist
+          path: openjazz-*.*
+
+  linux-gcc:
+    name: Build (Ubuntu x86_64, GCC, SDL1.2)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -yqq
+          sudo apt-get install -yqq build-essential cmake libsdl1.2-dev
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build OpenJazz (normal)
+        run: |
+          export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
+          cmake -B builddir -DCMAKE_BUILD_TYPE=Release \
+            -DLEGACY_SDL=ON -DSDL_VERSION=1 .
+          cmake --build builddir
+          ls -l builddir/OpenJazz
+          builddir/OpenJazz --version
+
+  linux-clang:
+    name: Build (Ubuntu 22.04 LTS x86_64, Clang-15, SDL2)
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -yqq
+          sudo apt-get install -yqq build-essential cmake ninja-build clang-15 \
+            libsdl2-dev asciidoctor w3m
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build OpenJazz (slim)
+        run: |
+          export CXX=clang++
+          export CXXFLAGS="-Wall -O2 -g -ffunction-sections -fdata-sections"
+          export LDFLAGS="-Wl,--gc-sections"
+          cmake --workflow --preset release
+          ls -l build-release/OpenJazz
+          build-release/OpenJazz --version
+
+      - name: Prepare artifact
+        env:
+          OJ_VERSION: ${{ needs.prepare.outputs.oj_version }}
+        run: |
+          mkdir OJ-${OJ_VERSION}
+          builds/ci/adoc2txt ${OJ_VERSION} < res/unix/OpenJazz.6.adoc > OJ-${OJ_VERSION}/Manual.txt
+          cp build-release/OpenJazz README.md COPYING doc/licenses.txt OJ-${OJ_VERSION}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openjazz-linux-glibc2.35-x86_64
+          path: OJ-*/
+
+  windows-mingw-gcc:
+    name: Build (Windows x86_64, MinGW, GCC)
+    needs: prepare
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: |
+            base-devel dos2unix w3m
+          pacboy: |
+            toolchain:p cmake:p ninja:p SDL2:p asciidoctor:p
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build OpenJazz
+        run: |
+          cmake --workflow --preset release
+
+      - name: Prepare artifact
+        env:
+          OJ_VERSION: ${{ needs.prepare.outputs.oj_version }}
+        run: |
+          cmake --install build-release --prefix $PWD
+          builds/ci/adoc2html ${OJ_VERSION} < res/unix/OpenJazz.6.adoc > dist/OpenJazzManual.html
+          builds/ci/docs2dist dist
+          mv dist OJ-${OJ_VERSION}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openjazz-windows-mingw-x86_64
+          path: OJ-*/
+
+  web-emscripten:
+    name: Build (Emscripten)
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: emscripten/emsdk
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -yqq
+          sudo apt-get install -yqq build-essential cmake ninja-build \
+            asciidoctor w3m
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build OpenJazz
+        run: |
+          emcmake cmake -B build-web . -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DDATAPATH=/data -DNETWORK=OFF
+          cmake --build build-web
+          touch build-web/data.{js,data} # dummy data
+          ls -l build-web/OpenJazz*
+
+      - name: Prepare artifact
+        env:
+          OJ_VERSION: ${{ needs.prepare.outputs.oj_version }}
+        run: |
+          mkdir OJ-${OJ_VERSION}
+          builds/ci/adoc2txt ${OJ_VERSION} < res/unix/OpenJazz.6.adoc > OJ-${OJ_VERSION}/Manual.txt
+          cp build-web/*.{wasm,js,html,data} README.md COPYING doc/licenses.txt OJ-${OJ_VERSION}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openjazz-web
+          path: OJ-*/
+
+  android-gradle-debug: # todo: add signed release build
+    name: Build (Android, Gradle, Debug)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28c
+          add-to-path: false
+          local-cache: false # broken: https://github.com/nttld/setup-ndk/issues/518
+          link-to-sdk: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      - name: Build OpenJazz
+        working-directory: builds/android
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: 2
+        run: |
+          ./gradlew assembleDebug -Pandroid.native.buildOutput=verbose
+      - name: Prepare artifact
+        env:
+          OJ_VERSION: ${{ needs.prepare.outputs.oj_version }}
+        run: |
+          mv build-android/OpenJazz/app/outputs/apk/debug/app-debug.apk OJ-${OJ_VERSION}-debug.apk
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openjazz-android-debug
+          path: OJ-*
+
+  nintendo-devkitpro:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - shortname: 'wii'
+            image: 'devkitppc:latest'
+            text: '(Wii, devkitPPC)'
+            wrapper: '$DEVKITPRO/portlibs/wii/bin/powerpc-eabi-cmake'
+            extraflags: '-DNETWORK=OFF'
+          - shortname: '3ds'
+            image: 'devkitarm:latest'
+            text: '(3DS, devkitARM)'
+            wrapper: '$DEVKITPRO/portlibs/3ds/bin/arm-none-eabi-cmake'
+          - shortname: 'switch'
+            image: 'devkita64:latest'
+            text: '(Switch, devkitA64)'
+            wrapper: '$DEVKITPRO/portlibs/switch/bin/aarch64-none-elf-cmake'
+    name: Build ${{ matrix.settings.text }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: devkitpro/${{ matrix.settings.image }}
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -yqq ninja-build dos2unix asciidoctor w3m
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build OpenJazz
+        run: |
+          ${{ matrix.settings.wrapper }} -G Ninja -B build . \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo ${{ matrix.settings.extraflags }}
+          cmake --build build
+
+      - name: Prepare artifact
+        env:
+          OJ_VERSION: ${{ needs.prepare.outputs.oj_version }}
+        run: |
+          cmake --install build --prefix $PWD
+          builds/ci/adoc2txt ${OJ_VERSION} < res/unix/OpenJazz.6.adoc > OpenJazz/Manual.txt
+          builds/ci/docs2dist OpenJazz
+          mv OpenJazz OJ-${OJ_VERSION}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openjazz-${{ matrix.settings.shortname }}
+          path: OJ-*/
+
+  psp-pspdev:
+    name: Build (PSP, pspdev)
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: pspdev/pspdev:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          apk add git cmake ninja asciidoctor w3m
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build OpenJazz
+        run: |
+          cmake --preset=psp-release -DNETWORK=OFF
+          cmake --build --preset=psp-release
+
+      - name: Prepare artifact
+        env:
+          OJ_VERSION: ${{ needs.prepare.outputs.oj_version }}
+        run: |
+          cmake --install build-psp-release --prefix $PWD
+          builds/ci/adoc2txt ${OJ_VERSION} < res/unix/OpenJazz.6.adoc > OpenJazz/Manual.txt
+          builds/ci/docs2dist OpenJazz
+          mv OpenJazz OJ-${OJ_VERSION}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openjazz-psp
+          path: OJ-*/
+
+  prerelease:
+    name: Create Pre-release
+    needs:
+      # all
+      - dist
+      - linux-clang
+      - windows-mingw-gcc
+      - web-emscripten
+      - android-gradle-debug
+      - nintendo-devkitpro
+      - psp-pspdev
+    # allow run when some platform jobs failed, but only on master branch in main repo
+    if: ${{ !cancelled() && github.ref == 'refs/heads/master' && needs.prepare.outputs.tag == '' && github.repository_owner == 'AlisterT' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+
+      - name: Zip artifacts and inspect directory
+        run: |
+          mv openjazz-dist dist
+          repo/builds/ci/dir2zip openjazz-*
+          tree -aL 2
+
+      - name: Advance tag to recent commit
+        uses: actions/github-script@v9
+        with:
+          script: |
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: "tags/continuous"
+              })
+            } catch (e) {
+              console.log("The 'continuous' tag does not exist.", e)
+            }
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: "refs/tags/continuous",
+                sha: context.sha
+              })
+            } catch (e) {
+              console.log("Unable to create 'continuous' tag.", e)
+            }
+
+      - name: Create CHANGELOG to add disclaimer
+        run: |
+          echo "This is an automated development snapshot, for testing only." > CHANGELOG.md
+          echo "Using the latest official release might be more stable." >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+      - name: Fill CHANGELOG with commit info
+        id: changelog
+        uses: requarks/changelog-action@v1
+        with:
+          token: ${{ github.token }}
+          tag: continuous
+          writeToFile: true
+          excludeTypes: chore,style
+          includeInvalidCommits: true
+
+      - name: Create/Update Pre-release and upload artifacts
+        id: prerelease
+        uses: ncipollo/release-action@v1
+        with:
+          prerelease: true
+          tag: continuous
+          allowUpdates: true
+          removeArtifacts: true
+          bodyFile: CHANGELOG.md
+          generateReleaseNotes: true
+          artifacts: |
+            openjazz-*.zip
+            dist/*.*
+
+      - name: Display information about Pre-release
+        run: |
+          echo "Created/Updated release with URL: ${{ steps.prerelease.outputs.html_url }}"
+
+  release:
+    name: Create Release
+    needs:
+      # all
+      - dist
+      - linux-clang
+      - windows-mingw-gcc
+      - web-emscripten
+      - android-gradle-debug
+      - nintendo-devkitpro
+      - psp-pspdev
+    # allow run when some platform jobs failed, but only for tags in main repo
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') && github.repository_owner == 'AlisterT' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+
+      - name: Zip artifacts and inspect directory
+        run: |
+          mv openjazz-dist dist
+          repo/builds/ci/dir2zip openjazz-*
+          tree -aL 2
+
+      - name: Create Release and upload artifacts
+        id: release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.oj_version }}
+          files: |
+            openjazz-*.*
+            dist/*.*
+
+      - name: Display information about release
+        run: |
+          echo "Created/Updated release with URL: ${{ steps.release.outputs.url }}"

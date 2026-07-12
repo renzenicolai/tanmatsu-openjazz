@@ -6,13 +6,17 @@ endif()
 
 idf_component_register(
 	SRCS
-		"main.c"
+		"main.cpp"
 	PRIV_REQUIRES
 		esp_lcd
 		fatfs
+		sdmmc
+		pthread
 		nvs_flash
 		bt
 		badge-bsp
+		sdl
+		openjazz
 		tanmatsu-wifi
 		${extra_requires}
 	INCLUDE_DIRS
