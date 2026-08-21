@@ -45,7 +45,7 @@ static uint16_t *rgb565_buffer = NULL;
 #endif
 
 #ifdef CONFIG_IDF_TARGET_ESP32P4
-static bool lcd_event_callback(esp_lcd_panel_handle_t panel_io, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
+static bool IRAM_ATTR lcd_event_callback(esp_lcd_panel_handle_t panel_io, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
 {
     xSemaphoreGive(lcd_semaphore);
     return false;
