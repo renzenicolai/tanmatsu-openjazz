@@ -532,7 +532,8 @@ int loop (LoopType type, PaletteEffect* paletteEffects, bool effectsStopped) {
 	}
 
 	// Show what has been drawn
-	video.flip(globalTicks - prevTicks, paletteEffects, effectsStopped);
+	const int paletteEffectMspfDivisor = 4;
+	video.flip((globalTicks - prevTicks) / paletteEffectMspfDivisor, paletteEffects, effectsStopped);
 
 
 	// Process system events
