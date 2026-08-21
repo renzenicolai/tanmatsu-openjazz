@@ -6,8 +6,8 @@ sdkconfig.old
 *.old
 tools/__pycache__
 .cache
-esp-idf
-esp-idf-tools
+/esp-idf
+/esp-idf-tools
 dependencies.lock
 managed_components
 .IDF_PATH
