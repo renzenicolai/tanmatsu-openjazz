@@ -188,7 +188,7 @@ void startUp (const char *argv0, int pathCount, char *paths[]) {
 
 	// Use any provided paths
 	for (int i = 0; i < pathCount; i++)
-		gamePaths.add(createString(paths[i]), PATH_TYPE_GAME);
+		gamePaths.add(createString(paths[i]), PATH_TYPE_GAME | PATH_TYPE_CONFIG);
 
 #ifdef ESP_PLATFORM
 	gamePaths.add(createString("/sdcard/openjazz"), PATH_TYPE_CONFIG|PATH_TYPE_TEMP);
