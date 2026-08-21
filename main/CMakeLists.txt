@@ -7,6 +7,7 @@ endif()
 idf_component_register(
 	SRCS
 		"main.cpp"
+		"sdcard.c"
 	PRIV_REQUIRES
 		esp_lcd
 		fatfs

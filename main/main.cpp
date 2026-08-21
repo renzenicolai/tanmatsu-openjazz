@@ -14,6 +14,7 @@ extern "C" {
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdcard.h"
 }
 #include <SDL3/SDL.h>
 #include <pthread.h>
@@ -26,7 +27,7 @@ static float hardware_volume = 45.0f;
 
 static void *openjazz_thread(void *) {
     char arg0[] = "OpenJazz";
-    char arg1[] = "/sdcard/openjazz";
+    char arg1[] = "/sd/openjazz";
     char *argv[] = {arg0, arg1, nullptr};
     return reinterpret_cast<void *>(static_cast<intptr_t>(main(2, argv)));
 }
@@ -203,25 +204,11 @@ extern "C" void app_main(void) {
     // the screen isn't just rendering into darkness.
     bsp_display_set_backlight_brightness(100);
 
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot.width = 4;
-    slot.clk = GPIO_NUM_43;
-    slot.cmd = GPIO_NUM_44;
-    slot.d0 = GPIO_NUM_39;
-    slot.d1 = GPIO_NUM_40;
-    slot.d2 = GPIO_NUM_41;
-    slot.d3 = GPIO_NUM_42;
-    esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
-    mount_cfg.format_if_mount_failed = false;
-    mount_cfg.max_files = 16;
-    mount_cfg.allocation_unit_size = 16 * 1024;
-    sdmmc_card_t *card = nullptr;
-    err = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot, &mount_cfg, &card);
+    err = sd_mount();
     if (err != ESP_OK) {
         ESP_LOGE("openjazz", "SD mount failed: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI("openjazz", "SD mounted: %s", card->cid.name);
+        ESP_LOGI("openjazz", "SD mounted");
     }
     esp_pthread_cfg_t input_cfg = esp_pthread_get_default_config();
     input_cfg.stack_size = 4096;
