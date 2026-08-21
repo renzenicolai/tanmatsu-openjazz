@@ -10,6 +10,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "SDL_espidfshared.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #ifdef CONFIG_IDF_TARGET_ESP32P4
 #include "driver/ppa.h"
 #include "esp_lcd_types.h"
@@ -160,6 +161,19 @@ IRAM_ATTR bool SDL_ESPIDF_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Wi
     SDL_Surface *surface = (SDL_Surface *)SDL_GetPointerProperty(SDL_GetWindowProperties(window), ESPIDF_SURFACE, NULL);
     if (!surface) {
         return SDL_SetError("Couldn't find ESPIDF surface for window");
+    }
+
+    static uint32_t fps_frame_count = 0;
+    static int64_t fps_window_start = 0;
+    int64_t now = esp_timer_get_time();
+    if (fps_window_start == 0) {
+        fps_window_start = now;
+    }
+    fps_frame_count++;
+    if (now - fps_window_start >= 1000000) {
+        printf("FPS: %.1f\n", fps_frame_count * 1000000.0 / (now - fps_window_start));
+        fps_frame_count = 0;
+        fps_window_start = now;
     }
 
 #ifdef CONFIG_IDF_TARGET_ESP32P4
