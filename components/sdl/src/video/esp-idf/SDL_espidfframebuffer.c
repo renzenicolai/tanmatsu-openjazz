@@ -274,6 +274,17 @@ void SDL_ESPIDF_DestroyWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *win
 {
     SDL_ClearProperty(SDL_GetWindowProperties(window), ESPIDF_SURFACE);
 
+    // Unregister our transfer-done callback before freeing the semaphore it signals -
+    // panel_handle/panel_io_handle are shared with the BSP, which only supports a single
+    // registered callback, so leaving ours in place after this point would let a later,
+    // unrelated draw (e.g. an error screen drawn straight through the BSP after SDL_Quit)
+    // trigger a completion event that gives a semaphore that no longer exists.
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+    esp_lcd_dpi_panel_register_event_callbacks(panel_handle, &(esp_lcd_dpi_panel_event_callbacks_t){0}, NULL);
+#else
+    esp_lcd_panel_io_register_event_callbacks(panel_io_handle, &(esp_lcd_panel_io_callbacks_t){0}, NULL);
+#endif
+
     // Delete the semaphore
     if (lcd_semaphore) {
         vSemaphoreDelete(lcd_semaphore);

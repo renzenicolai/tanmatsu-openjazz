@@ -19,6 +19,7 @@ idf_component_register(
 		sdl
 		openjazz
 		tanmatsu-wifi
+		pax-gfx
 		${extra_requires}
 	INCLUDE_DIRS
 		"."
