@@ -22,21 +22,48 @@ static const char *TAG = "SDL_espidfframebuffer";
 
 #define ESPIDF_SURFACE "SDL.internal.window.surface"
 
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+// PPA requires the output buffer's address AND size to be aligned to the cache line
+// size (ppa_check_buffer_alignment in ppa_core.c); the board config has both L1 and L2
+// at 64 bytes (sdkconfig CONFIG_CACHE_L1/L2_CACHE_LINE_SIZE).
+#if CONFIG_CACHE_L2_CACHE_LINE_SIZE > CONFIG_CACHE_L1_CACHE_LINE_SIZE
+#define PPA_BUF_ALIGNMENT CONFIG_CACHE_L2_CACHE_LINE_SIZE
+#else
+#define PPA_BUF_ALIGNMENT CONFIG_CACHE_L1_CACHE_LINE_SIZE
+#endif
+#endif
+
 static SemaphoreHandle_t lcd_semaphore;
-static int max_chunk_height = 4;  // Configurable chunk height
+// Must divide evenly into the source height (200) and be a multiple of 8, so that the
+// PPA's 4-bit scale fraction (see ppa_hw_scaled_len) truncates losslessly every chunk.
+static int max_chunk_height = 8;
 #ifdef CONFIG_IDF_TARGET_ESP32P4
 static ppa_client_handle_t ppa_srm_handle = NULL;  // PPA client handle
 static uint8_t *ppa_out_buf = NULL;  // Reusable PPA output buffer
 static size_t ppa_out_buf_size = 0;  // Size of the PPA output buffer
 
 #ifndef SCALE_FACTOR
-int scale_factor = 1;
-float scale_factor_float = 1.0;
+int scale_factor = 2;
+// The ESP32-P4 PPA's scale registers only hold a 4-bit fraction (1/16 steps, truncated
+// toward zero), so a requested scale of 2.4 is actually applied as 2 + floor(0.4*16)/16
+// = 2.375. Spelling it out here (rather than 2.4f) keeps this value honest about what
+// the hardware really does; see ppa_hw_scaled_len.
+float scale_factor_float = 2.375f;
 // Workaround to quickly pass scaling to PPA
 // This should be probably handled on Render level
 void set_scale_factor(int factor, float factor_float) {
     scale_factor = factor;
     scale_factor_float = factor_float;
+}
+
+// Mirrors the PPA driver's internal fixed-point scale computation (ppa_srm.c) exactly,
+// so buffer sizes and draw rectangles always match what the hardware actually writes -
+// using a plain float estimate here can disagree with the truncated hardware result and
+// leave unwritten (stale) pixels visible at the edge of each scaled chunk.
+static inline uint32_t ppa_hw_scaled_len(uint32_t len, float scale) {
+    uint32_t scale_int = (uint32_t)scale;
+    uint32_t scale_frag = (uint32_t)(scale * 16.0f) & 15;  // 4-bit fraction, 1/16 steps
+    return scale_int * len + scale_frag * len / 16;
 }
 #endif
 
@@ -105,10 +132,14 @@ bool SDL_ESPIDF_CreateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *wind
         ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
     }
 
-    if (scale_factor != 1) {
-        // Allocate reusable PPA output buffer
-        ppa_out_buf_size = (w * scale_factor) * (max_chunk_height * scale_factor) * sizeof(uint16_t);  // 2x scaling
-        ppa_out_buf = heap_caps_malloc(ppa_out_buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (scale_factor_float != 1.0f) {
+        // Allocate reusable PPA output buffer, sized for the largest possible chunk.
+        // Both the address and size must be cache-line aligned (see PPA_BUF_ALIGNMENT).
+        uint32_t out_w = ppa_hw_scaled_len(max_chunk_height, scale_factor_float);
+        uint32_t out_h = ppa_hw_scaled_len(w, scale_factor_float);
+        size_t raw_size = (size_t)out_w * (size_t)out_h * sizeof(uint16_t);
+        ppa_out_buf_size = (raw_size + PPA_BUF_ALIGNMENT - 1) & ~(PPA_BUF_ALIGNMENT - 1);
+        ppa_out_buf = heap_caps_aligned_alloc(PPA_BUF_ALIGNMENT, ppa_out_buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         if (!ppa_out_buf) {
             return SDL_SetError("Failed to allocate PPA output buffer");
         }
@@ -132,12 +163,31 @@ IRAM_ATTR bool SDL_ESPIDF_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Wi
     }
 
 #ifdef CONFIG_IDF_TARGET_ESP32P4
+    // The panel is native portrait; display_config.width/height are swapped (see
+    // esp_bsp_sdl_init) to describe the landscape orientation the game renders in,
+    // so swap them back to get the physical panel's own coordinate space.
+    int panel_native_w = display_config.height;
+    int panel_native_h = display_config.width;
+
+    // Footprint of the rotated+scaled image on the panel, centered to letterbox/pillarbox
+    // instead of stretching. Computed with the same truncating fixed-point math the PPA
+    // hardware uses (ppa_hw_scaled_len), not a plain float estimate, so it always matches
+    // what actually gets written chunk by chunk.
+    int num_chunks = surface->h / max_chunk_height;  // exact: max_chunk_height divides surface->h
+    int chunk_w = ppa_hw_scaled_len(max_chunk_height, scale_factor_float);
+    int dest_w = num_chunks * chunk_w;
+    int dest_h = ppa_hw_scaled_len(surface->w, scale_factor_float);
+    int x_offset = (panel_native_w - dest_w) / 2;
+    int y_offset = (panel_native_h - dest_h) / 2;
+
     // Iterate over the framebuffer in chunks
     for (int y = 0; y < surface->h; y += max_chunk_height) {
         int height = (y + max_chunk_height > surface->h) ? (surface->h - y) : max_chunk_height;
         uint16_t *src_pixels = (uint16_t *)surface->pixels + (y * surface->w);
 
-        if (scale_factor != 1) {
+        if (scale_factor_float != 1.0f) {
+            uint32_t out_w = ppa_hw_scaled_len(height, scale_factor_float);
+
             // PPA SRM configuration for scaling
             ppa_srm_oper_config_t srm_config = {
                 .in.buffer = src_pixels,
@@ -150,12 +200,14 @@ IRAM_ATTR bool SDL_ESPIDF_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Wi
                 .out.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
                 .out.buffer = ppa_out_buf,
                 .out.buffer_size = ppa_out_buf_size,  // Reused output buffer
-                .out.pic_w = surface->w * scale_factor,
-                .out.pic_h = height * scale_factor,
+                .out.pic_w = out_w,
+                .out.pic_h = dest_h,
 
-                .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,  // No rotation
+                .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
                 .scale_x = scale_factor_float,
                 .scale_y = scale_factor_float,
+                .mirror_x = false,
+                .mirror_y = false,
 
                 .rgb_swap = 0,
                 .byte_swap = 0,
@@ -165,8 +217,13 @@ IRAM_ATTR bool SDL_ESPIDF_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Wi
             // Execute PPA scaling
             ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
 
-            // Draw the scaled output to the LCD
-            ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, 0, y * scale_factor, surface->w * scale_factor, (y + height) * scale_factor, ppa_out_buf));
+            // Rotation turns each horizontal source chunk into a vertical strip in
+            // ppa_out_buf. At 270 degrees the chunk order is reversed: the chunk taken
+            // from the top of the source lands at the right/far end of the panel strip.
+            int chunk_index = y / max_chunk_height;
+            int x_start = x_offset + (num_chunks - 1 - chunk_index) * chunk_w;
+            int x_end = x_start + (int)out_w;
+            ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, x_start, y_offset, x_end, y_offset + dest_h, ppa_out_buf));
         } else {
             // Draw the scaled output to the LCD
             ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, 0, y, surface->w, (y + height), src_pixels));

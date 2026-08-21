@@ -3,7 +3,7 @@ DEVICE ?= tanmatsu
 PORT ?= /dev/ttyACM0
 
 # Build parameters
-IDF_VERSION ?= v5.5.2
+IDF_VERSION ?= v6.0.2
 BUILD ?= build/$(DEVICE)
 FAT ?= 0
 SDKCONFIG_DEFAULTS ?= sdkconfigs/general;sdkconfigs/$(DEVICE)
