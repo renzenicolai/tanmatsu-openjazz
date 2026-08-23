@@ -4694,8 +4694,8 @@ void SDL_VideoQuit(void)
         SDL_free(_this->primary_selection_text);
         _this->primary_selection_text = NULL;
     }
-    _this->free(_this);
-    _this = NULL;
+    //_this->free(_this);
+    //_this = NULL;
 
     // This needs to happen after the video subsystem has removed pen data
     SDL_QuitPen();

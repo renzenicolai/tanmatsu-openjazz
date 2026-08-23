@@ -14,7 +14,9 @@ extern "C" {
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdcard.h"
 }
+#include "pax_gfx.h"
 #include <SDL3/SDL.h>
 #include <pthread.h>
 
@@ -26,7 +28,7 @@ static float hardware_volume = 45.0f;
 
 static void *openjazz_thread(void *) {
     char arg0[] = "OpenJazz";
-    char arg1[] = "/sdcard/openjazz";
+    char arg1[] = "/sd/openjazz";
     char *argv[] = {arg0, arg1, nullptr};
     return reinterpret_cast<void *>(static_cast<intptr_t>(main(2, argv)));
 }
@@ -182,6 +184,65 @@ static void *input_task(void *) {
     return nullptr;
 }
 
+static void show_error_screen(const char *title, const char *detail) {
+    size_t h_res = 0, v_res = 0;
+    bsp_display_color_format_t color_fmt;
+    bsp_display_endianness_t endian;
+    if (bsp_display_get_parameters(&h_res, &v_res, &color_fmt, &endian) != ESP_OK || h_res == 0 || v_res == 0) {
+        ESP_LOGE(TAG, "Failed to get display parameters for error screen");
+        return;
+    }
+
+    size_t buf_size = pax_buf_calc_size_dynamic((int)h_res, (int)v_res, PAX_BUF_16_565RGB);
+    void *fb_mem = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!fb_mem) {
+        fb_mem = heap_caps_malloc(buf_size, MALLOC_CAP_8BIT);
+    }
+    if (!fb_mem) {
+        ESP_LOGE(TAG, "Failed to allocate error screen buffer");
+        return;
+    }
+
+    pax_buf_t buf;
+    pax_buf_init(&buf, fb_mem, (int)h_res, (int)v_res, PAX_BUF_16_565RGB);
+
+    bsp_display_rotation_t display_rotation = bsp_display_get_default_rotation();
+    pax_orientation_t      orientation      = PAX_O_UPRIGHT;
+    switch (display_rotation) {
+        case BSP_DISPLAY_ROTATION_90:
+            orientation = PAX_O_ROT_CCW;
+            break;
+        case BSP_DISPLAY_ROTATION_180:
+            orientation = PAX_O_ROT_HALF;
+            break;
+        case BSP_DISPLAY_ROTATION_270:
+            orientation = PAX_O_ROT_CW;
+            break;
+        case BSP_DISPLAY_ROTATION_0:
+        default:
+            orientation = PAX_O_UPRIGHT;
+            break;
+    }
+
+    pax_buf_set_orientation(&buf, orientation);
+
+    pax_background(&buf, pax_col_rgb(0, 0, 0));
+    pax_center_text(&buf, pax_col_rgb(255, 80, 80), PAX_FONT_DEFAULT, 18, pax_buf_get_width(&buf) / 2.0f, pax_buf_get_height(&buf) / 2.0f - 40, title);
+    pax_center_text(&buf, pax_col_rgb(220, 220, 220), PAX_FONT_DEFAULT, 14, pax_buf_get_width(&buf) / 2.0f, pax_buf_get_height(&buf) / 2.0f - 10, detail);
+    pax_center_text(&buf, pax_col_rgb(150, 150, 150), PAX_FONT_DEFAULT, 14, pax_buf_get_width(&buf) / 2.0f, pax_buf_get_height(&buf) / 2.0f + 20, "Press ESC to exit");
+    bsp_display_blit(0, 0, h_res, v_res, pax_buf_get_pixels(&buf));
+
+    pax_buf_destroy(&buf);
+    heap_caps_free(fb_mem);
+}
+
+static void wait_for_esc(void) {
+    bool pressed = false;
+    while (!(bsp_input_read_navigation_key(BSP_INPUT_NAVIGATION_KEY_ESC, &pressed) == ESP_OK && pressed)) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
 extern "C" void app_main(void) {
     gpio_install_isr_service(0);
     esp_err_t err = nvs_flash_init();
@@ -203,26 +264,16 @@ extern "C" void app_main(void) {
     // the screen isn't just rendering into darkness.
     bsp_display_set_backlight_brightness(100);
 
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot.width = 4;
-    slot.clk = GPIO_NUM_43;
-    slot.cmd = GPIO_NUM_44;
-    slot.d0 = GPIO_NUM_39;
-    slot.d1 = GPIO_NUM_40;
-    slot.d2 = GPIO_NUM_41;
-    slot.d3 = GPIO_NUM_42;
-    esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
-    mount_cfg.format_if_mount_failed = false;
-    mount_cfg.max_files = 16;
-    mount_cfg.allocation_unit_size = 16 * 1024;
-    sdmmc_card_t *card = nullptr;
-    err = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot, &mount_cfg, &card);
+    err = sd_mount();
     if (err != ESP_OK) {
         ESP_LOGE("openjazz", "SD mount failed: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI("openjazz", "SD mounted: %s", card->cid.name);
+        show_error_screen("SD card not found", "Please insert an SD card and restart the app");
+        wait_for_esc();
+        bsp_device_restart_to_launcher();
+        return;
     }
+    ESP_LOGI("openjazz", "SD mounted");
+
     esp_pthread_cfg_t input_cfg = esp_pthread_get_default_config();
     input_cfg.stack_size = 4096;
     input_cfg.prio = 8;
@@ -246,5 +297,11 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(pthread_join(game_thread, &thread_result));
     int rc = static_cast<int>(reinterpret_cast<intptr_t>(thread_result));
     ESP_LOGI("openjazz", "OpenJazz exited (%d)", rc);
+
+    if (rc == -1) {
+        show_error_screen("OpenJazz failed to start", "Check that the game data is present on the SD card\nThe game data should be in a folder named 'openjazz'.");
+        wait_for_esc();
+    }
+
     bsp_device_restart_to_launcher();
 }

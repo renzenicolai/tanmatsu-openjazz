@@ -188,7 +188,7 @@ void startUp (const char *argv0, int pathCount, char *paths[]) {
 
 	// Use any provided paths
 	for (int i = 0; i < pathCount; i++)
-		gamePaths.add(createString(paths[i]), PATH_TYPE_GAME);
+		gamePaths.add(createString(paths[i]), PATH_TYPE_GAME | PATH_TYPE_CONFIG);
 
 #ifdef ESP_PLATFORM
 	gamePaths.add(createString("/sdcard/openjazz"), PATH_TYPE_CONFIG|PATH_TYPE_TEMP);
@@ -532,7 +532,8 @@ int loop (LoopType type, PaletteEffect* paletteEffects, bool effectsStopped) {
 	}
 
 	// Show what has been drawn
-	video.flip(globalTicks - prevTicks, paletteEffects, effectsStopped);
+	const int paletteEffectMspfDivisor = 4;
+	video.flip((globalTicks - prevTicks) / paletteEffectMspfDivisor, paletteEffects, effectsStopped);
 
 
 	// Process system events

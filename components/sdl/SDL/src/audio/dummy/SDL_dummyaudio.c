@@ -96,7 +96,12 @@ static bool DUMMYAUDIO_OpenDevice(SDL_AudioDevice *device)
     device->spec.freq = 44100;
     device->spec.format = SDL_AUDIO_S16;
     device->spec.channels = 2;
-    bsp_audio_set_rate(44100);
+    i2s_chan_handle_t i2s = NULL;
+    if (bsp_audio_get_i2s_handle(&i2s) == ESP_OK) {
+        i2s_channel_disable(i2s);
+        bsp_audio_set_rate(44100);
+        i2s_channel_enable(i2s);
+    }
     bsp_audio_set_volume(65.0f);
     bsp_audio_set_amplifier(true);
 #endif
