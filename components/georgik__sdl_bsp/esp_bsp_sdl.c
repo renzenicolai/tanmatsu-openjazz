@@ -20,8 +20,8 @@ esp_err_t esp_bsp_sdl_init(esp_bsp_sdl_display_config_t *c, esp_lcd_panel_handle
     c->max_transfer_sz=w*h*2; c->has_touch=false; *p=panel; *io=panel_io; return ESP_OK;
 }
 esp_err_t esp_bsp_sdl_blit(int x,int y,int width,int height,const void *pixels){return bsp_display_blit(x,y,x+width,y+height,pixels);}
-esp_err_t esp_bsp_sdl_backlight_on(void){return bsp_display_set_backlight_brightness(100);}
-esp_err_t esp_bsp_sdl_backlight_off(void){return bsp_display_set_backlight_brightness(0);}
+esp_err_t esp_bsp_sdl_backlight_on(void){ bsp_display_set_backlight_brightness(100); return ESP_OK;}
+esp_err_t esp_bsp_sdl_backlight_off(void){ bsp_display_set_backlight_brightness(0); return ESP_OK;}
 esp_err_t esp_bsp_sdl_display_on_off(bool on){return on?esp_bsp_sdl_backlight_on():esp_bsp_sdl_backlight_off();}
 esp_err_t esp_bsp_sdl_touch_init(void){return ESP_ERR_NOT_SUPPORTED;}
 esp_err_t esp_bsp_sdl_touch_read(esp_bsp_sdl_touch_info_t *i){(void)i;return ESP_ERR_NOT_SUPPORTED;}

@@ -63,6 +63,36 @@ GameMenu::GameMenu (File *file) {
 
 	difficulty = difficultyType::Normal;
 
+	// Remember where our share of MENU.000 starts, so reloadScreens() can
+	// reopen the file fresh and pick up from here.
+	screensFileOffset = file->tell();
+
+	loadScreens(file);
+
+	fileMenu = new FileMenu();
+
+}
+
+
+/**
+ * Delete the game menu.
+ */
+GameMenu::~GameMenu () {
+
+	unloadScreens();
+
+	delete fileMenu;
+
+}
+
+
+/**
+ * Load the difficulty and episode preview screens from an open menu file.
+ *
+ * @param file File containing menu graphics, positioned at this data
+ */
+void GameMenu::loadScreens (File *file) {
+
 	// Load the difficulty graphics
 	file->loadPalette(menuPalette);
 	difficultyScreen = file->loadSurface(SW, SH);
@@ -105,22 +135,57 @@ GameMenu::GameMenu (File *file) {
 
 	}
 
-	fileMenu = new FileMenu();
+}
+
+
+/**
+ * Free the difficulty and episode preview screens.
+ *
+ * These are only drawn from menu code, never while a level is running, so
+ * freeing them for the duration of gameplay (see playNewGame) gives the
+ * level's own assets (tileset, sprites) that memory back on targets where
+ * it's scarce. reloadScreens() restores them afterwards.
+ */
+void GameMenu::unloadScreens () {
+
+	for (int i = 0; i < MAX_EPISODES; i++) {
+		video.destroySurface(episodeScreens[i]);
+		episodeScreens[i] = nullptr;
+	}
+
+	video.destroySurface(difficultyScreen);
+	difficultyScreen = nullptr;
 
 }
 
 
 /**
- * Delete the game menu.
+ * Reload the difficulty and episode preview screens after unloadScreens().
+ *
+ * Reopens MENU.000 (the original handle was only ever a constructor-local
+ * borrow) and seeks back to screensFileOffset to pick up the same data.
  */
-GameMenu::~GameMenu () {
+void GameMenu::reloadScreens () {
 
-	for (int i = 0; i < MAX_EPISODES; i++)
-		video.destroySurface(episodeScreens[i]);
+	File *file;
 
-	video.destroySurface(difficultyScreen);
+	try {
 
-	delete fileMenu;
+		file = new File("MENU.000", PATH_TYPE_GAME);
+
+	} catch (int e) {
+
+		LOG_ERROR("Could not reopen MENU.000 to restore game menu screens");
+
+		return;
+
+	}
+
+	file->seek(screensFileOffset, true);
+
+	loadScreens(file);
+
+	delete file;
 
 }
 
@@ -173,9 +238,17 @@ int GameMenu::playNewGame (GameModeType mode, char* firstLevel) {
 
 	// Play the level(s)
 
+	// The difficulty/episode screens aren't drawn again until we're back in
+	// menu code, so free them for the duration of gameplay (see
+	// unloadScreens()) - the level's own assets need that memory more here.
+	unloadScreens();
+
 	ret = game->play();
 
 	delete game;
+
+	// No point reloading if we're on our way out anyway.
+	if (ret != E_QUIT) reloadScreens();
 
 	if (ret != E_QUIT) playMusic("MENUSNG.PSM");
 
@@ -776,9 +849,17 @@ int GameMenu::joinGame () {
 
 	// Play the level(s)
 
+	// The difficulty/episode screens aren't drawn again until we're back in
+	// menu code, so free them for the duration of gameplay (see
+	// unloadScreens()) - the level's own assets need that memory more here.
+	unloadScreens();
+
 	ret = game->play();
 
 	delete game;
+
+	// No point reloading if we're on our way out anyway.
+	if (ret != E_QUIT) reloadScreens();
 
 	if (ret != E_QUIT) playMusic("MENUSNG.PSM");
 

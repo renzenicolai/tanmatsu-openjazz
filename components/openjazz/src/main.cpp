@@ -35,6 +35,8 @@
 #endif
 #include <cmath>
 #include <cstring>
+#include <exception>
+#include <new>
 #include <argparse.h>
 
 #include "game/game.h"
@@ -681,7 +683,33 @@ int main(int argc, char *argv[]) {
 
 	// Play the opening cutscene, run the main menu, etc.
 
-	ret = play();
+	// play() and everything below it only ever throws `int` error codes
+	// (see the catches above) on purpose - but a failed `new` throws
+	// std::bad_alloc instead, which none of those catch. Left uncaught,
+	// that unwinds past main() into std::terminate() and hard-aborts the
+	// whole app. Converting it to the same -1 "failed to start" path the
+	// rest of this function already uses turns an abort on memory-tight
+	// targets into a normal (if ungraceful) exit.
+	try {
+
+		ret = play();
+
+	} catch (const std::bad_alloc &e) {
+
+		LOG_FATAL("Out of memory: %s", e.what());
+		ret = -1;
+
+	} catch (const std::exception &e) {
+
+		LOG_FATAL("Unhandled exception: %s", e.what());
+		ret = -1;
+
+	} catch (...) {
+
+		LOG_FATAL("Unknown unhandled exception");
+		ret = -1;
+
+	}
 
 
 	// Save configuration and shut down

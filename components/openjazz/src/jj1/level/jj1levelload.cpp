@@ -376,6 +376,14 @@ int JJ1Level::loadTiles (char* fileName) {
 
 	LOG_TRACE("Loaded %d tiles", tiles);
 
+	// All the data needed from the tileset file has now been decoded into
+	// `pixels`, and the combine+surface steps below need to hold both the
+	// combined buffer and the destination surface's own pixel data (each
+	// TTOI(1) * TTOI(tiles) bytes) at once - freeing the file's raw read
+	// buffer here avoids needing all three live simultaneously, which is
+	// enough to tip memory-constrained targets into an allocation failure.
+	file.reset();
+
 	// Create combined buffer
 	unsigned char* buffer = new unsigned char[TTOI(1) * TTOI(tiles)];
 	for (int i = 0; i < tiles; i++) {

@@ -48,7 +48,6 @@
 MainMenu::MainMenu () {
 
 	File *file;
-	time_t currentTime;
 
 	// Load the OpenJazz logo
 
@@ -80,6 +79,26 @@ MainMenu::MainMenu () {
 		throw;
 
 	}
+
+	loadBackground(file);
+
+	if (logo) video.enableColorKey(logo, 28);
+
+	gameMenu = new GameMenu(file);
+
+	delete file;
+
+}
+
+
+/**
+ * Load the background and highlight screens from an open menu file.
+ *
+ * @param file File containing menu graphics, positioned at this data
+ */
+void MainMenu::loadBackground (File *file) {
+
+	time_t currentTime;
 
 	// only available in Holiday Hare 94/95
 	if (file->getSize() > 200000) {
@@ -121,9 +140,52 @@ MainMenu::MainMenu () {
 
 	video.enableColorKey(background, 0);
 	video.enableColorKey(highlight, 0);
-	if (logo) video.enableColorKey(logo, 28);
 
-	gameMenu = new GameMenu(file);
+}
+
+
+/**
+ * Free the background and highlight screens.
+ *
+ * These are only drawn while the main menu itself is on screen - not while
+ * any game-menu submenu or an actual level is running - so freeing them
+ * around those (see run()) gives that memory back where it's scarce.
+ * reloadBackground() restores them afterwards.
+ */
+void MainMenu::unloadBackground () {
+
+	video.destroySurface(background);
+	background = nullptr;
+
+	video.destroySurface(highlight);
+	highlight = nullptr;
+
+}
+
+
+/**
+ * Reload the background and highlight screens after unloadBackground().
+ *
+ * Reopens MENU.000 (the original handle was only ever a constructor-local
+ * borrow) and reads from its start, same as the constructor does.
+ */
+void MainMenu::reloadBackground () {
+
+	File *file;
+
+	try {
+
+		file = new File("MENU.000", PATH_TYPE_GAME);
+
+	} catch (int e) {
+
+		LOG_ERROR("Could not reopen MENU.000 to restore main menu screens");
+
+		return;
+
+	}
+
+	loadBackground(file);
 
 	delete file;
 
@@ -162,13 +224,28 @@ int MainMenu::select (int option) {
 
 		case 0: // New game
 
-			if (gameMenu->newGame() == E_QUIT) return E_QUIT;
+			{
+				// background/highlight are only drawn by the main menu itself,
+				// never by anything gameMenu draws (including an actual level) -
+				// free them for this whole excursion, on memory-constrained
+				// targets that's the difference between a level fitting in
+				// memory or not.
+				unloadBackground();
+				int ret = gameMenu->newGame();
+				if (ret != E_QUIT) reloadBackground();
+				if (ret == E_QUIT) return E_QUIT;
+			}
 
 			break;
 
 		case 1: // Load game
 
-			if (gameMenu->loadGame() == E_QUIT) return E_QUIT;
+			{
+				unloadBackground();
+				int ret = gameMenu->loadGame();
+				if (ret != E_QUIT) reloadBackground();
+				if (ret == E_QUIT) return E_QUIT;
+			}
 
 			break;
 
@@ -388,7 +465,20 @@ int MainMenu::run () {
 					char *fileName = createString("MACRO.1");
 					fileName[6] += macro;
 
-					if (game->playLevel(fileName) == E_QUIT) {
+					// Same memory pressure as a real "new game" applies to the
+					// attract-mode demo too - free the menu-only screens for
+					// its duration.
+					unloadBackground();
+					gameMenu->unloadScreens();
+
+					int ret = game->playLevel(fileName);
+
+					if (ret != E_QUIT) {
+						reloadBackground();
+						gameMenu->reloadScreens();
+					}
+
+					if (ret == E_QUIT) {
 
 						delete[] fileName;
 						delete game;
@@ -457,6 +547,11 @@ int MainMenu::run () {
  * @return Error code
  */
 int MainMenu::skip (int levelNum, int worldNum) {
+
+	// This MainMenu is discarded as soon as skip() returns (see its one
+	// caller in play()), so there's no need to reload these afterwards.
+	unloadBackground();
+	gameMenu->unloadScreens();
 
 	if (gameMenu->loadGame(levelNum, worldNum) == E_QUIT) return E_QUIT;
 

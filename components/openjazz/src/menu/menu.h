@@ -72,6 +72,9 @@ class GameMenu : public Menu {
 		int            episodes; ///< Number of episodes
 		difficultyType difficulty; ///< Difficulty setting (easy, medium, hard, turbo (hard in JJ2 levels))
 		FileMenu*      fileMenu; ///< Load menu
+		int            screensFileOffset; ///< Offset of screen data within MENU.000, for reloadScreens()
+
+		void loadScreens      (File* file);
 
 		int playNewGame       (GameModeType mode, char* firstLevel);
 		int newGameDifficulty (GameModeType mode, char* firstLevel);
@@ -85,6 +88,12 @@ class GameMenu : public Menu {
 	public:
 		explicit GameMenu(File* file);
 		~GameMenu();
+
+		// Called from MainMenu around anything that doesn't need these
+		// screens on screen - gameplay, the attract-mode demo - to give that
+		// memory back on memory-constrained targets.
+		void unloadScreens ();
+		void reloadScreens ();
 
 		int newGame  ();
 		int loadGame ();
@@ -125,6 +134,10 @@ class MainMenu : public Menu {
 		MainMenu(const MainMenu&); // non construction-copyable
 		MainMenu& operator=(const MainMenu&); // non copyable
 		int select (int option);
+
+		void loadBackground   (File* file);
+		void unloadBackground ();
+		void reloadBackground ();
 
 	public:
 		MainMenu  ();

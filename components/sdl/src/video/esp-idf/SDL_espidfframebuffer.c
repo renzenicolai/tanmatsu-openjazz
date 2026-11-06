@@ -116,8 +116,11 @@ bool SDL_ESPIDF_CreateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *wind
     *pitch = surface->pitch;
 
 #ifndef CONFIG_IDF_TARGET_ESP32P4
-    // Allocate RGB565 buffer in IRAM
-    rgb565_buffer = heap_caps_malloc(w * max_chunk_height * sizeof(uint16_t), MALLOC_CAP_32BIT | MALLOC_CAP_INTERNAL);
+    // DMA-capable DRAM: MALLOC_CAP_32BIT|MALLOC_CAP_INTERNAL lands in IRAM on classic
+    // ESP32, which only allows 32-bit-aligned accesses - the per-pixel 16-bit stores
+    // below would fault there (LoadStoreError). MALLOC_CAP_DMA keeps it in DRAM (which
+    // supports 8/16/32-bit access) and makes it usable directly by esp_lcd_panel_draw_bitmap.
+    rgb565_buffer = heap_caps_malloc(w * max_chunk_height * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!rgb565_buffer) {
         SDL_DestroySurface(surface);
         return SDL_SetError("Failed to allocate memory for RGB565 buffer");

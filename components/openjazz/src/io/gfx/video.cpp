@@ -57,6 +57,7 @@ SDL_Surface* Video::createSurface (const unsigned char * pixels, int width, int 
 		SDL_Palette *pal = SDL_CreateSurfacePalette(ret);
 		if(!pal) {
 			LOG_FATAL("Could not create surface palette: %s", SDL_GetError());
+			SDL_DestroySurface(ret);
 			return nullptr;
 		}
 	}

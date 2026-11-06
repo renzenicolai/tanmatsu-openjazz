@@ -14,3 +14,9 @@ CONFIG_ESP_DEBUG_STUBS_ENABLE=y
 CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n
 CONFIG_ESP_WIFI_SLP_IRAM_OPT=n
 CONFIG_BOOTLOADER_REGION_PROTECTION_ENABLE=n
+# openjazz throws/catches real C++ exceptions for control flow (File::File,
+# jj1levelload.cpp, etc.) and components/openjazz/CMakeLists.txt forces
+# -fexceptions to compile that. Without this, IDF's default (exceptions off)
+# makes any throw - including std::bad_alloc from a failed `new` under memory
+# pressure - call abort() instead of unwinding to the waiting catch.
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
