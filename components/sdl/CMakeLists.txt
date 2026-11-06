@@ -169,6 +169,7 @@ idf_component_register(SRCS
                     REQUIRES
                         georgik__sdl_bsp
                     PRIV_REQUIRES
+                        esp_timer
                         ${extra_reqs}
 )
 

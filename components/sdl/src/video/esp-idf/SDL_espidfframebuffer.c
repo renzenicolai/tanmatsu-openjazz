@@ -49,7 +49,15 @@ int scale_factor = 2;
 // toward zero), so a requested scale of 2.4 is actually applied as 2 + floor(0.4*16)/16
 // = 2.375. Spelling it out here (rather than 2.4f) keeps this value honest about what
 // the hardware really does; see ppa_hw_scaled_len.
+#if defined(CONFIG_BSP_TARGET_WHY2025)
+// why2025's panel is a square 720x720; 2.25 scales the 320-wide source to exactly 720
+// (2 + floor(0.25*16)/16 = 2.25, no truncation), filling the screen width edge to edge
+// while keeping the source aspect ratio, with the generic centering below letterboxing
+// the (shorter) scaled height within the square panel.
+float scale_factor_float = 2.25f;
+#else
 float scale_factor_float = 2.375f;
+#endif
 // Workaround to quickly pass scaling to PPA
 // This should be probably handled on Render level
 void set_scale_factor(int factor, float factor_float) {
@@ -217,7 +225,14 @@ IRAM_ATTR bool SDL_ESPIDF_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Wi
                 .out.pic_w = out_w,
                 .out.pic_h = dest_h,
 
+#if defined(CONFIG_BSP_TARGET_WHY2025)
+                // Matches why2025's bsp_display_get_default_rotation() (ROTATION_90), so
+                // the game image and the pax-gfx error screen agree on orientation.
+                .rotation_angle = PPA_SRM_ROTATION_ANGLE_90,
+#else
+                // Matches tanmatsu's bsp_display_get_default_rotation() (ROTATION_270).
                 .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
+#endif
                 .scale_x = scale_factor_float,
                 .scale_y = scale_factor_float,
                 .mirror_x = false,
@@ -232,10 +247,18 @@ IRAM_ATTR bool SDL_ESPIDF_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Wi
             ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
 
             // Rotation turns each horizontal source chunk into a vertical strip in
-            // ppa_out_buf. At 270 degrees the chunk order is reversed: the chunk taken
-            // from the top of the source lands at the right/far end of the panel strip.
+            // ppa_out_buf.
             int chunk_index = y / max_chunk_height;
+#if defined(CONFIG_BSP_TARGET_WHY2025)
+            // At 90 degrees the chunk order is direct: the chunk taken from the top of
+            // the source lands at the left/near end of the panel strip (the mirror image
+            // of the 270 degree case below).
+            int x_start = x_offset + chunk_index * chunk_w;
+#else
+            // At 270 degrees the chunk order is reversed: the chunk taken
+            // from the top of the source lands at the right/far end of the panel strip.
             int x_start = x_offset + (num_chunks - 1 - chunk_index) * chunk_w;
+#endif
             int x_end = x_start + (int)out_w;
             ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, x_start, y_offset, x_end, y_offset + dest_h, ppa_out_buf));
         } else {

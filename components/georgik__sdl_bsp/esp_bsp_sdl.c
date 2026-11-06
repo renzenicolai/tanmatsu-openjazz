@@ -9,8 +9,14 @@ esp_err_t esp_bsp_sdl_init(esp_bsp_sdl_display_config_t *c, esp_lcd_panel_handle
     esp_lcd_panel_io_handle_t panel_io = NULL;
     r = bsp_display_get_panel(&panel); if (r != ESP_OK) return r;
     r = bsp_display_get_panel_io(&panel_io); if (r != ESP_OK) return r;
-    /* The panel is portrait in memory; Tanmatsu is used landscape. */
-    c->width=(int)h; c->height=(int)w; c->pixel_format=SDL_PIXELFORMAT_RGB565;
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+    /* The DSI panel is portrait in memory; Tanmatsu/why2025 use it rotated via the PPA. */
+    c->width=(int)h; c->height=(int)w;
+#else
+    /* mch2022's panel is already native landscape, no rotation needed. */
+    c->width=(int)w; c->height=(int)h;
+#endif
+    c->pixel_format=SDL_PIXELFORMAT_RGB565;
     c->max_transfer_sz=w*h*2; c->has_touch=false; *p=panel; *io=panel_io; return ESP_OK;
 }
 esp_err_t esp_bsp_sdl_blit(int x,int y,int width,int height,const void *pixels){return bsp_display_blit(x,y,x+width,y+height,pixels);}
@@ -19,5 +25,13 @@ esp_err_t esp_bsp_sdl_backlight_off(void){return bsp_display_set_backlight_brigh
 esp_err_t esp_bsp_sdl_display_on_off(bool on){return on?esp_bsp_sdl_backlight_on():esp_bsp_sdl_backlight_off();}
 esp_err_t esp_bsp_sdl_touch_init(void){return ESP_ERR_NOT_SUPPORTED;}
 esp_err_t esp_bsp_sdl_touch_read(esp_bsp_sdl_touch_info_t *i){(void)i;return ESP_ERR_NOT_SUPPORTED;}
-const char *esp_bsp_sdl_get_board_name(void){return "Tanmatsu";}
+const char *esp_bsp_sdl_get_board_name(void){
+#if defined(CONFIG_BSP_TARGET_WHY2025)
+    return "WHY2025";
+#elif defined(CONFIG_BSP_TARGET_MCH2022)
+    return "MCH2022";
+#else
+    return "Tanmatsu";
+#endif
+}
 esp_err_t esp_bsp_sdl_deinit(void){return ESP_OK;}
